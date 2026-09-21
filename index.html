@@ -1,1 +1,146 @@
-<h1>Sentinel Deployment Active</h1><p>Pipeline working.</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GST & Manifest Discrepancy Validator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen p-6 font-sans">
+  <div class="max-w-5xl mx-auto">
+    <div class="flex justify-between items-center mb-6 pb-4 border-b border-slate-200">
+      <div>
+        <h1 class="text-2xl font-bold text-slate-800">Freight & Vendor Invoice Sentinel</h1>
+        <p class="text-sm text-slate-500">Automated GSTIN format verification & math discrepancy auditor</p>
+      </div>
+      <span class="bg-emerald-100 text-emerald-800 text-xs font-semibold px-3 py-1 rounded-full">v1.0 Live Instance</span>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="bg-white border-2 border-dashed border-slate-300 rounded-xl p-8 text-center mb-6 hover:border-blue-500 transition cursor-pointer" id="dropzone">
+      <input type="file" id="fileInput" accept=".csv" class="hidden" />
+      <p class="text-slate-600 font-medium">Drop your vendor manifest / billing CSV here, or click to upload</p>
+      <p class="text-xs text-slate-400 mt-1">Accepts vendor invoice logs with GSTIN, Taxable Value, Tax, and Total</p>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="flex justify-between items-center mb-4">
+      <div class="flex gap-4">
+        <button onclick="loadSampleData()" class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-4 py-2 rounded-lg font-medium">Load 5 Sample Trade Invoices</button>
+        <button onclick="exportClean()" id="exportBtn" class="hidden bg-blue-600 hover:bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-medium">Export Verified Data</button>
+      </div>
+      <div id="stats" class="text-xs font-semibold text-slate-600"></div>
+    </div>
+
+    <!-- Results Table -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-x-auto">
+      <table class="w-full text-left text-sm" id="resultsTable">
+        <thead class="bg-slate-100 text-slate-700 text-xs uppercase border-b border-slate-200">
+          <tr>
+            <th class="p-3">Invoice #</th>
+            <th class="p-3">Vendor / Transporter</th>
+            <th class="p-3">GSTIN</th>
+            <th class="p-3 text-right">Taxable (₹)</th>
+            <th class="p-3 text-right">Tax (₹)</th>
+            <th class="p-3 text-right">Billed Total (₹)</th>
+            <th class="p-3 text-center">Status</th>
+            <th class="p-3">Audit Finding</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody" class="divide-y divide-slate-100">
+          <tr><td colspan="8" class="p-4 text-center text-slate-400">No data loaded. Click "Load Sample Data" or drop a CSV file.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+    let currentRows = [];
+
+    const sampleInvoices = [
+      { id: "INV-HYD-101", vendor: "Sri Balaji Roadlines", gstin: "36AAACB1234F1Z5", taxable: 48000, tax: 8640, total: 56640 },
+      { id: "INV-HYD-102", vendor: "Deccan Cargo Movers", gstin: "36ABCDE5678G2Z9", taxable: 14500, tax: 2610, total: 17110 },
+      { id: "INV-HYD-103", vendor: "Om Sai Logistics", gstin: "36INVALIDGST00", taxable: 92000, tax: 16560, total: 108560 },
+      { id: "INV-HYD-104", vendor: "Krishna Freight Lines", gstin: "36AABCK9012M1Z3", taxable: 35000, tax: 6300, total: 45000 },
+      { id: "INV-HYD-101", vendor: "Sri Balaji Roadlines", gstin: "36AAACB1234F1Z5", taxable: 48000, tax: 8640, total: 56640 }
+    ];
+
+    function auditRow(row, seenIds) {
+      let issues = [];
+      const isDuplicate = seenIds[row.id] > 1;
+      const validGstin = gstinRegex.test(row.gstin);
+      const expectedTotal = parseFloat(row.taxable) + parseFloat(row.tax);
+      const mathError = Math.abs(expectedTotal - parseFloat(row.total)) > 1;
+
+      if (isDuplicate) issues.push("Duplicate Invoice Number");
+      if (!validGstin) issues.push("Invalid GSTIN Structure");
+      if (mathError) issues.push(`Math mismatch (Diff: ₹${Math.abs(expectedTotal - row.total).toFixed(2)})`);
+
+      return { isClean: issues.length === 0, notes: issues.join(" | ") || "Passed verification" };
+    }
+
+    function renderRows(rows) {
+      currentRows = rows;
+      const seenIds = {};
+      rows.forEach(r => seenIds[r.id] = (seenIds[r.id] || 0) + 1);
+
+      let cleanCount = 0;
+      let flaggedCount = 0;
+      const tbody = document.getElementById("tableBody");
+      tbody.innerHTML = "";
+
+      rows.forEach(r => {
+        const audit = auditRow(r, seenIds);
+        if (audit.isClean) cleanCount++; else flaggedCount++;
+
+        const tr = document.createElement("tr");
+        tr.className = audit.isClean ? "hover:bg-slate-50" : "bg-red-50/70 hover:bg-red-50 text-red-950";
+        tr.innerHTML = `
+          <td class="p-3 font-mono text-xs">${r.id}</td>
+          <td class="p-3 font-medium">${r.vendor}</td>
+          <td class="p-3 font-mono text-xs">${r.gstin}</td>
+          <td class="p-3 text-right">₹${parseFloat(r.taxable).toLocaleString()}</td>
+          <td class="p-3 text-right">₹${parseFloat(r.tax).toLocaleString()}</td>
+          <td class="p-3 text-right font-semibold">₹${parseFloat(r.total).toLocaleString()}</td>
+          <td class="p-3 text-center">
+            <span class="px-2 py-0.5 text-xs rounded-full font-semibold ${audit.isClean ? 'bg-emerald-100 text-emerald-800' : 'bg-red-200 text-red-800'}">
+              ${audit.isClean ? 'Verified' : 'Flagged'}
+            </span>
+          </td>
+          <td class="p-3 text-xs ${audit.isClean ? 'text-slate-500' : 'text-red-700 font-semibold'}">${audit.notes}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById("stats").innerHTML = `Audited: ${rows.length} | <span class="text-emerald-600">Clean: ${cleanCount}</span> | <span class="text-red-600">Flagged: ${flaggedCount}</span>`;
+      document.getElementById("exportBtn").classList.remove("hidden");
+    }
+
+    function loadSampleData() { renderRows(sampleInvoices); }
+
+    document.getElementById("dropzone").onclick = () => document.getElementById("fileInput").click();
+    document.getElementById("fileInput").onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          complete: (results) => renderRows(results.data.filter(r => r.id))
+        });
+      }
+    };
+
+    function exportClean() {
+      const cleanRows = currentRows.filter(r => auditRow(r, {}).isClean);
+      const csv = Papa.unparse(cleanRows);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "verified_invoices.csv";
+      link.click();
+    }
+  </script>
+</body>
+</html>
